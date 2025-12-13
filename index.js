@@ -2,64 +2,59 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    getContentType
+    getContentType,
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const { commands } = require('./command');
 const config = require('./config');
+
+// Global Variable for Auto Status
 global.autoStatus = config.AUTO_STATUS_SAVE;
 
-// Spam කරන අයව තාවකාලිකව මතක තියාගන්න මැප් එක
+// Spam Map
 const spamMap = new Map();
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { version } = await fetchLatestBaileysVersion();
 
-  // ... මුල හරිය එහෙමම තියන්න ...
-
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    
-    // 👇 මෙතන ඔයාගේ නම්බර් එක දාන්න (QR වෙනුවට Code එක එන්න)
-    const usePairingCode = true;
-    const phoneNumber = "94771916428"; // උදා: 94771234567
+    // =================================================
+    // 👇 PAIRING CODE SETTINGS
+    // =================================================
+    const usePairingCode = true; 
+    const phoneNumber = "94771916428"; // ඔයාගේ නම්බර් එක
 
     const sock = makeWASocket({
+        version,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: !usePairingCode, // Pairing Code නම් QR එපා
+        printQRInTerminal: !usePairingCode,
         auth: state,
-        browser: ["Ubuntu", "Chrome", "20.0.04"] // Render එකට ගැලපෙන Browser එක
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
-    // 👇 මේ කෑල්ලෙන් තමයි Code එක එවලන්නේ
     if (usePairingCode && !sock.authState.creds.registered) {
-        console.log("Pairing code ඉල්ලමින් පවතී... ⏳");
+        console.log(`Pairing with: ${phoneNumber}`);
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(phoneNumber);
                 console.log(`\n\n🟢 YOUR PAIRING CODE: ${code}\n\n`);
-            } catch (e) {
-                console.log("Code Error:", e);
+            } catch (err) {
+                console.log("Pairing Code Error:", err);
             }
         }, 3000);
     }
 
-    sock.ev.on('creds.update', saveCreds);
-
-    // ... පහළ කෑලි එහෙමම තියන්න (connection update කොටස) ...
-
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            console.log('Scan this QR Code:');
-            qrcode.generate(qr, { small: true });
-        }
+        const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot();
+            if (shouldReconnect) {
+                console.log("Reconnecting...");
+                startBot();
+            }
         } else if (connection === 'open') {
             console.log('✅ Bot Connected successfully!');
             console.log('⬇️  Installing Plugins...');
@@ -83,70 +78,69 @@ async function startBot() {
             if (!mek.message) return;
             if (mek.key.fromMe) return;
 
-            // =============================================
-            // 1. මූලික විචල්‍යයන් (Variables) මෙතනම සාදාගැනීම
-            // =============================================
-           const type = getContentType(mek.message);
-const body = (type === 'conversation') ? mek.message.conversation : 
-             (type === 'extendedTextMessage') ? mek.message.extendedTextMessage.text :
-             (type === 'imageMessage') ? mek.message.imageMessage.caption :
-             (type === 'videoMessage') ? mek.message.videoMessage.caption : '';
+            const type = getContentType(mek.message);
+            const body = (type === 'conversation') ? mek.message.conversation : 
+                         (type === 'extendedTextMessage') ? mek.message.extendedTextMessage.text :
+                         (type === 'imageMessage') ? mek.message.imageMessage.caption :
+                         (type === 'videoMessage') ? mek.message.videoMessage.caption : '';
 
             const from = mek.key.remoteJid;
             const sender = mek.key.participant || mek.key.remoteJid;
             const isGroup = from.endsWith('@g.us');
             const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-            
-            // =============================================
-            // 2. INBOX SPAM PROTECTION (ප්‍රධාන කොටස)
-            // =============================================
-            const isOwner = sender.includes('94771916428'); // ⚠️ මෙතන ඔයාගේ නම්බර් එක දාන්න!
+            const isOwner = sender.includes(phoneNumber);
 
+            // ============================================
+            //          📥 AUTO STATUS SAVER & VIEW
+            // ============================================
+            if (mek.key.remoteJid === 'status@broadcast') {
+                if (config.AUTO_STATUS_VIEW) {
+                    await sock.readMessages([mek.key]);
+                }
+                if (global.autoStatus) {
+                    const caption = mek.message.imageMessage?.caption || mek.message.videoMessage?.caption || "";
+                    const ownerJid = phoneNumber + '@s.whatsapp.net';
+
+                    if (mek.message.imageMessage) {
+                        let imageBuffer = await sock.downloadMediaMessage(mek, 'image');
+                        await sock.sendMessage(ownerJid, { image: imageBuffer, caption: caption });
+                    } else if (mek.message.videoMessage) {
+                        let videoBuffer = await sock.downloadMediaMessage(mek, 'video');
+                        await sock.sendMessage(ownerJid, { video: videoBuffer, caption: caption });
+                    }
+                }
+                return; // Status නම් මෙතනින් නවතින්න
+            }
+
+            // ============================================
+            //          🚫 SPAM PROTECTION
+            // ============================================
             if (!isGroup && !isOwner) {
                 let spamData = spamMap.get(sender) || { count: 0, lastMsg: 0 };
                 let now = Date.now();
-
                 if (now - spamData.lastMsg < 5000) {
                     spamData.count++;
                 } else {
                     spamData.count = 1;
                 }
-                
                 spamData.lastMsg = now;
                 spamMap.set(sender, spamData);
 
-                if (spamData.count >= 4) {
-                    await sock.sendMessage(from, { text: "🚫 *Spam Detected!* You are blocked automatically." });
+                if (spamData.count >= 5) {
+                    await sock.sendMessage(from, { text: "🚫 Spam Detected! Blocked." });
                     await sock.updateBlockStatus(sender, "block");
                     spamMap.delete(sender);
                     return;
                 }
             }
 
-            // =============================================
-            // 3. COMMANDS RUN කරන කොටස
-            // =============================================
-            if (!body.startsWith('.')) return;
-
-            const commandName = body.slice(1).trim().split(" ")[0].toLowerCase();
-            const q = body.slice(1).trim().split(" ").slice(1).join(" ");
-
             // ============================================
-            //              🎭 FUN FEATURES
+            //          🎭 AUTO REACT & VOICE
             // ============================================
-            const config = require('./config'); // Config එක import කරගැනීම
-
-            // 1. AUTO STATUS VIEW (Status බැලීම)
-            if (config.AUTO_STATUS_VIEW && mek.key.remoteJid === 'status@broadcast') {
-                await sock.readMessages([mek.key]);
-            }
-
-            // 2. AUTO REACT & VOICE (Commands නොවන මැසේජ් සඳහා)
-            if (!isGroup && !body.startsWith('.')) { // Group වල නැතුව Inbox විතරක් වැඩ කරන්න හදමු
-                
+            if (!isGroup && !body.startsWith('.')) {
                 const lowerBody = body.toLowerCase();
-
-                // --- Auto React ---
+                
+                // Auto React
                 if (config.AUTO_REACT) {
                     if (lowerBody.includes('hi') || lowerBody.includes('hello')) {
                         await sock.sendMessage(from, { react: { text: "👋", key: mek.key } });
@@ -155,57 +149,38 @@ const body = (type === 'conversation') ? mek.message.conversation :
                     }
                 }
 
-                // --- Auto Voice ---
+                // Auto Voice
                 if (config.AUTO_VOICE) {
-                    // Config එකේ තියෙන වචන ලිස්ට් එක පරීක්ෂා කිරීම
                     for (let key in config.VOICE_MAP) {
                         if (lowerBody === key) {
                             await sock.sendMessage(from, { 
                                 audio: { url: config.VOICE_MAP[key] }, 
                                 mimetype: 'audio/mpeg', 
-                                ptt: true // Voice Note එකක් වගේ යවන්න
+                                ptt: true 
                             }, { quoted: mek });
                         }
                     }
                 }
             }
+
             // ============================================
-            //          📥 AUTO STATUS SAVER (UPDATED)
+            //          ⚙️ COMMAND HANDLER
             // ============================================
-            
-            if (mek.key.remoteJid === 'status@broadcast') {
-                if (config.AUTO_STATUS_VIEW) {
-                    await sock.readMessages([mek.key]);
+            if (body.startsWith('.')) {
+                const commandName = body.slice(1).trim().split(" ")[0].toLowerCase();
+                const q = body.slice(1).trim().split(" ").slice(1).join(" ");
+
+                const command = commands.find((cmd) => cmd.pattern.test(commandName));
+                if (command) {
+                    await command.function(sock, mek, m, {
+                        from,
+                        q,
+                        isGroup,
+                        sender,
+                        reply: (text) => sock.sendMessage(from, { text }, { quoted: mek }),
+                        isOwner
+                    });
                 }
-
-                // 👇 වෙනස් කරපු පේළිය මෙන්න
-                if (global.autoStatus) { 
-                    
-                    const user = mek.key.participant; 
-                    const caption = mek.message.imageMessage?.caption || mek.message.videoMessage?.caption || "";
-                    const ownerNumber = '94771916428@s.whatsapp.net'; // ඔයාගේ නම්බර් එක
-
-                    if (mek.message.imageMessage) {
-                        let imageBuffer = await sock.downloadMediaMessage(mek, 'image');
-                        await sock.sendMessage(ownerNumber, { image: imageBuffer, caption: caption });
-                    }
-                    else if (mek.message.videoMessage) {
-                        let videoBuffer = await sock.downloadMediaMessage(mek, 'video');
-                        await sock.sendMessage(ownerNumber, { video: videoBuffer, caption: caption });
-                    }
-                }
-            }
-
-            const command = commands.find((cmd) => cmd.pattern.test(commandName));
-
-            if (command) {
-                await command.function(sock, mek, m, {
-                    from,
-                    q,
-                    isGroup,
-                    sender,
-                    reply: (text) => sock.sendMessage(from, { text }, { quoted: mek })
-                });
             }
 
         } catch (err) {
@@ -213,6 +188,5 @@ const body = (type === 'conversation') ? mek.message.conversation :
         }
     });
 }
-
 
 startBot();
