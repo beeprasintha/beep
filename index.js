@@ -18,11 +18,38 @@ const spamMap = new Map();
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
+  // ... මුල හරිය එහෙමම තියන්න ...
+
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    
+    // 👇 මෙතන ඔයාගේ නම්බර් එක දාන්න (QR වෙනුවට Code එක එන්න)
+    const usePairingCode = true;
+    const phoneNumber = "94771916428"; // උදා: 94771234567
+
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
+        printQRInTerminal: !usePairingCode, // Pairing Code නම් QR එපා
         auth: state,
+        browser: ["Ubuntu", "Chrome", "20.0.04"] // Render එකට ගැලපෙන Browser එක
     });
+
+    // 👇 මේ කෑල්ලෙන් තමයි Code එක එවලන්නේ
+    if (usePairingCode && !sock.authState.creds.registered) {
+        console.log("Pairing code ඉල්ලමින් පවතී... ⏳");
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log(`\n\n🟢 YOUR PAIRING CODE: ${code}\n\n`);
+            } catch (e) {
+                console.log("Code Error:", e);
+            }
+        }, 3000);
+    }
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // ... පහළ කෑලි එහෙමම තියන්න (connection update කොටස) ...
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -186,5 +213,6 @@ const body = (type === 'conversation') ? mek.message.conversation :
         }
     });
 }
+
 
 startBot();
