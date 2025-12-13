@@ -8,24 +8,37 @@ const {
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
 const { commands } = require('./command');
 const config = require('./config');
 
-// Global Variable for Auto Status
-global.autoStatus = config.AUTO_STATUS_SAVE;
+// ============================================
+// 🌍 1. EXPRESS SERVER (RENDER FIX)
+// ============================================
+const app = express();
+const port = process.env.PORT || 8000;
 
-// Spam Map
-const spamMap = new Map();
+app.get('/', (req, res) => {
+  res.send('<h1>🤖 KNIGHT BOT IS RUNNING! 🤖</h1>');
+});
+
+app.listen(port, () => {
+  console.log(`🌐 Server is running on PORT: ${port}`);
+});
+
+// ============================================
+// 👇 BOT SETTINGS & VARIABLES
+// ============================================
+global.autoStatus = config.AUTO_STATUS_SAVE;
+const spamMap = new Map(); // Spam කරන අයව මතක තියාගන්න
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
-    // =================================================
-    // 👇 PAIRING CODE SETTINGS
-    // =================================================
+    // ⚠️ ඔයාගේ නම්බර් එක මෙතනට දාන්න
     const usePairingCode = true; 
-    const phoneNumber = "94771916428"; // ඔයාගේ නම්බර් එක
+    const phoneNumber = "94771916428"; 
 
     const sock = makeWASocket({
         version,
@@ -35,6 +48,7 @@ async function startBot() {
         browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
+    // Pairing Code යැවීම
     if (usePairingCode && !sock.authState.creds.registered) {
         console.log(`Pairing with: ${phoneNumber}`);
         setTimeout(async () => {
@@ -87,33 +101,29 @@ async function startBot() {
             const from = mek.key.remoteJid;
             const sender = mek.key.participant || mek.key.remoteJid;
             const isGroup = from.endsWith('@g.us');
-            const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
             const isOwner = sender.includes(phoneNumber);
 
             // ============================================
-            //          📥 AUTO STATUS SAVER & VIEW
+            // 📥 2. AUTO STATUS SAVER & VIEW
             // ============================================
             if (mek.key.remoteJid === 'status@broadcast') {
-                if (config.AUTO_STATUS_VIEW) {
-                    await sock.readMessages([mek.key]);
-                }
+                if (config.AUTO_STATUS_VIEW) await sock.readMessages([mek.key]);
                 if (global.autoStatus) {
                     const caption = mek.message.imageMessage?.caption || mek.message.videoMessage?.caption || "";
                     const ownerJid = phoneNumber + '@s.whatsapp.net';
-
                     if (mek.message.imageMessage) {
-                        let imageBuffer = await sock.downloadMediaMessage(mek, 'image');
-                        await sock.sendMessage(ownerJid, { image: imageBuffer, caption: caption });
+                        let img = await sock.downloadMediaMessage(mek, 'image');
+                        await sock.sendMessage(ownerJid, { image: img, caption: caption });
                     } else if (mek.message.videoMessage) {
-                        let videoBuffer = await sock.downloadMediaMessage(mek, 'video');
-                        await sock.sendMessage(ownerJid, { video: videoBuffer, caption: caption });
+                        let vid = await sock.downloadMediaMessage(mek, 'video');
+                        await sock.sendMessage(ownerJid, { video: vid, caption: caption });
                     }
                 }
-                return; // Status නම් මෙතනින් නවතින්න
+                return;
             }
 
             // ============================================
-            //          🚫 SPAM PROTECTION
+            // 🚫 3. SPAM PROTECTION
             // ============================================
             if (!isGroup && !isOwner) {
                 let spamData = spamMap.get(sender) || { count: 0, lastMsg: 0 };
@@ -135,7 +145,7 @@ async function startBot() {
             }
 
             // ============================================
-            //          🎭 AUTO REACT & VOICE
+            // 🎭 4. AUTO REACT & VOICE
             // ============================================
             if (!isGroup && !body.startsWith('.')) {
                 const lowerBody = body.toLowerCase();
@@ -164,21 +174,15 @@ async function startBot() {
             }
 
             // ============================================
-            //          ⚙️ COMMAND HANDLER
+            // ⚙️ 5. COMMAND HANDLER
             // ============================================
             if (body.startsWith('.')) {
                 const commandName = body.slice(1).trim().split(" ")[0].toLowerCase();
                 const q = body.slice(1).trim().split(" ").slice(1).join(" ");
-
                 const command = commands.find((cmd) => cmd.pattern.test(commandName));
                 if (command) {
                     await command.function(sock, mek, m, {
-                        from,
-                        q,
-                        isGroup,
-                        sender,
-                        reply: (text) => sock.sendMessage(from, { text }, { quoted: mek }),
-                        isOwner
+                        from, q, isGroup, sender, reply: (text) => sock.sendMessage(from, { text }, { quoted: mek }), isOwner
                     });
                 }
             }
